@@ -1,1 +1,2 @@
 # comfortvisuals
+This code contains r code functions to visualize thermal comfort results from EnegyPlus simulation results. To use this place the simulation results in 'sims' folder. Run the comfort_visualizations_for_EnergyPlus.Rmd. The plots are saved in 'plots' folder
