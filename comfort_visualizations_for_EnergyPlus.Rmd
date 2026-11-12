@@ -1,0 +1,1431 @@
+---
+title: "Visualizing thermal comfort simulation outputs from EnergyPlus"
+subtitle: "A guide to visualizing and interpreting thermal comfort simulation outputs"
+author: "Chitra Nambiar, Tobias Kramer, Stefano Schiavon, *Center for the Built Environment, UC Berkeley*"
+date: "`r Sys.Date()`"
+bibliography: reference.bib
+link-citations: true
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+    code_folding: hide
+  #word_document:
+   # toc: true
+   # toc_depth: 3
+   # number_sections: false
+---
+
+## Introduction
+
+Whole-building simulation programs such as [EnergyPlus](https://energyplus.net/) [@crawley_energyplus_2001] genetate detailed outputs of indoor thermal conditions under different weather, envelope, and HVAC operating conditions. They can report comfort indices such as the Predicted Mean Vote (PMV),operative temperature, and standard effective temperature (SET) for each zone and time step. However, translating these large datasets into meaningful visualizations that help users interpret spatial and temporal patterns in thermal comfort remains challenging. There is limited guidance on how to effectively visualize and interpret thermal comfort outputs from building simulations. This guide presents a set of visualizations organized around five practitioner questions to translate hourly thermal comfort outputs into accessible, actionable insights for design evaluation, operational decision-making, and stakeholder communication.
+
+**Scope.** The visualizations suggested in this guide are designed to address common questions that arise when evaluating thermal comfort using hourly building simulation results. It is applicable to a wide range of building types, climates, and operational strategies. The comfort variables and visualizations presented here are based on Fangers PMV/PPD [@fanger_thermal_1972] method used in ASHRAE 55 [@ashrae55_2023] and ISO 7730:2005 [@iso7730_2005] and operative temperatures. However, the general data processing workflow can apply to other EnergyPlus comfort outputs, including SET from the Pierce two-node model [@gagge_standard_1986] and the ASHRAE 55 adaptive model [@dedear_adaptive_1998]. The visualizations presented here are organized around four questions: where discomfort occurs, when it occurs, how often it occurs, and why or what may be causing to it. Any of the visualizations can be also be used to compare how results differ between design or operating scenarios.
+
+The guide does not propose comfort models or define acceptable comfort conditions. All thresholds and targets used here are illustrative and should be set for each project per the specific requirements and context. For detailed information on thermal comfort theory, please refer to the ASHRAE 55 standards[@ashrae55_2023] and related literature [Thermal comfort](https://en.wikipedia.org/wiki/Thermal_comfort).
+
+```{r decision-matrix, echo=FALSE, fig.cap="Figure 1. Decision matrix: start from the question, then pick the visualization.", out.width="90%"}
+#knitr::include_graphics(here::here("decision_matrix.png"))
+```
+
+Use the matrix to choose a visualization based on the question you need to answer. Each section below addresses one of these questions:
+
+| Question | Primary visualization | Supporting visualizations | Section |
+|---|---|---|---|
+| **Where** does discomfort occur? | Zone comfort scorecard | - | [1](#where) |
+| **When** does discomfort occur? | Carpet plot | Distribution (histogram) | [2](#how-often) |
+| **How often** does discomfort occur? | Carpet plot  | Monthly zone risk matrix, monthly boxplots | [3](#when) |
+| **Why** does discomfort occur? | Event time series |  | [4](#why) |
+| **Comparing designs or scenarios** | Any of the above |  | [5](#compare) |
+
+### Prerequisites
+- **R 4.1** with `tidyverse`, `lubridate`, `patchwork`, `scales`, and `here`. Uncomment the `install.packages()` line in the setup chunk to install them for the first time.
+- **EnergyPlus simulation** with hourly `Output:Variable` requests for the variables listed in the [Data Import](#data-import) section set to `Hourly` frequency. These must be specified in the EnergyPlus IDF before running the simulation. For further details on EnergyPlus simulation setup, please refer to the [EnergyPlus documentation](https://energyplus.net/documentation). Information about thermal comfort models and their implementation in EnergyPlus can be found in the [EnergyPlus Input Output Reference](https://energyplus.net/documentation/input-output-reference).
+
+
+
+### Steps to use this document
+
+1. Run your EnergyPlus simulation using one of the thermal comfort models (e.g., Fanger, Pierce, Adaptive comfort) in the "People" object and with the required `Output:Variable` entries in your IDF.
+2. Place this `.Rmd` in a project folder and the EnergyPlus output CSV in the `sims/` subfolder. Update `csv_file` in the data-import chunk with actual filename.
+3. Update inputs in the 'setup' and 'data-setup' chunks (marked ###User input###). 
+4. Click **Knit**. The report displays the plots; individual plot chunks also save selected figures as PNG files in the working directory.
+
+```{r initialize, include=FALSE}
+knitr::opts_chunk$set(
+  root.dir = "./",
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 12,
+  out.width = "100%"
+)
+# Install any missing packages the first time you run this document. Uncomment the line below to install packages if needed:
+# install.packages(c("tidyverse", "lubridate", "patchwork", "scales", "here"))
+library(tidyverse)
+library(lubridate)
+library(patchwork)
+library(scales)
+library(here)
+```
+
+
+```{r setup, include=FALSE}
+if (!exists("params", inherits = FALSE)) {
+  params <- list(
+    csv_file = "sims/ASHRAE901_OfficeSmall_STD2004_Albuquerque_PMV_clo.csv",
+    simulation_year = 2025, output_dir = "plots", make_plots = TRUE)
+}
+###User inputs########################
+# Shared analysis settings. Confirm these assumptions with actual simulation.
+simulation_year <- params$simulation_year 
+apply_dst_adjustment <- TRUE # set to TRUE if the simulation accounts for daylight saving time in the RunPeriodControl:DaylightSavingTime object in the EnergyPlus IDF
+dst_start <- as.Date("2023-03-12") # set to the actual start date of daylight saving time as specified in the RunPeriodControl:DaylightSavingTime object in the EnergyPlus IDF 
+dst_end <- as.Date("2023-11-05") # set to the actual end date of daylight saving time as specified in the RunPeriodControl:DaylightSavingTime object in the EnergyPlus IDF 
+config <- list(
+ ###User input## change the zone names and colors to match your EnergyPlus model
+  zones = c(
+    core = "Core",
+    south = "South",
+    east = "East",
+    north = "North",
+    west = "West"
+  ),
+  zone_order = c("core", "south", "east", "west", "north"), ###User input##
+  selected_zone = "north",
+  zone_colors = c(  ###User input##
+    Core = "#4a3aa7",
+    South = "#eb6834",
+    East = "#eda100",
+    North = "#007acc",
+    West = "#1baf7a"
+  ),
+  # PMV boundaries per ASHRAE 55.
+  pmv_comfort = 0.5,
+  pmv_severe = 1.5,
+  pmv_clamp = 3,
+ # Illustrative operative-temperature range, in degrees C.
+  top_band = c(20, 25), ###User input## change to match design intent or project requirements
+  # Annual heatmap display settings.
+  occupied_start_hour = 6, ###User input## change to match actual start of occupied hours in the EnergyPlus model
+  occupied_end_hour = 22,  ###User input## change to match actual end of occupied hours in the EnergyPlus model
+  heatmap_weekdays_only = TRUE,
+  comfort_bar_width = 0.13,
+  # General output settings.
+  output_dir = params$output_dir,
+  save_plots = isTRUE(params$make_plots),
+  dpi = 600,
+  plot_bg = "white",
+  base_size = 12
+)
+```
+
+
+```{r validate-data, include=FALSE}
+validate_config <- function(config) {
+  required <- c("zones", "zone_order", "selected_zone", "zone_colors",
+                "pmv_comfort", "pmv_severe", "pmv_clamp", "top_band",
+                "occupied_start_hour", "occupied_end_hour", "heatmap_weekdays_only",
+                "comfort_bar_width", "output_dir", "save_plots", "dpi", "plot_bg", "base_size")
+  missing <- setdiff(required, names(config))
+  if (length(missing)) stop("Missing config entries: ", paste(missing, collapse = ", "))
+  if (!config$selected_zone %in% names(config$zones)) stop("selected_zone must be one of names(config$zones).")
+  if (!all(config$zone_order %in% names(config$zones))) stop("zone_order must contain internal zone IDs from config$zones.")
+  if (length(config$top_band) != 2 || config$top_band[1] >= config$top_band[2]) stop("top_band must be c(lower, upper).")
+  if (config$pmv_comfort < 0 || config$pmv_severe <= config$pmv_comfort) stop("Check PMV thresholds.")
+  invisible(TRUE)
+}
+validate_config(config)
+```
+
+
+**Data import**
+
+The 'data-import' chunk reads the EnergyPlus hourly CSV. The `process_df()` function in the 'data-setup' chunk below parses timestamps, reshapes zone variables, and creates the shorter names used by the plots. The featured example in this guide is based on a [small office building model](https://www.energycodes.gov/prototype-building-models#Commercial) with five zones (one core and four perimeter zones) [@nambiar_2476528]. The Fanger thermal comfort model [@fanger_thermal_1972] is used in this example. 
+
+**Timestamps.** EnergyPlus reports hour-ending timestamps (e.g., `07:00:00` is the average over 06:00–07:00, and the last hour of each day is stamped `24:00:00`). `process_df()` converts each timestamp to the start of its interval, so throughout this guide hour 6 means 06:00–07:00, and the carpet plots draw that hour as the band between 6 and 7 on the y-axis.
+
+**Before knitting:** Place the CSV in the `sims/` folder, or update `csv_file` below to point to the correct file.
+
+**Required EnergyPlus `Output:Variable` entries** (add these to your IDF, all at `Hourly` frequency):
+
+| EnergyPlus variable | Used for |
+|---|---|
+| `Environment:Site Outdoor Air Drybulb Temperature [C]` | Outdoor reference temperature |
+| `Environment:Site Outdoor Air Relative Humidity [%]` | Outdoor humidity reference |
+| `Zone People Occupant Count []` | Filtering to occupied hours |
+| `Zone Operative Temperature [C]` | Comfort metric (all zones) |
+| `Zone Air Relative Humidity [%]` | Indoor humidity (all zones) |
+| `Zone Thermal Comfort Fanger Model PMV []` | PMV comfort categorization |
+
+| Additional variables to consider for additional analysis |
+|---|
+| `Zone Thermal Comfort Pierce Model Standard Effective Temperature [C]` | SET comfort index |
+| `Zone Thermal Comfort ASHRAE 55 Adaptive Model Running Average Outdoor Air Temperature [C]` | ASHRAE 55 adaptive comfort bounds |
+| `Cooling:Electricity [J]` | HVAC cooling energy |
+| `Heating:Electricity [J]` | HVAC heating energy |
+
+
+```{r data-import, include=FALSE}
+# Set this path relative to the project directory.
+csv_file <- file.path("sims", "ASHRAE901_OfficeSmall_STD2004_Albuquerque_PMV_clo.csv")
+if (!file.exists(csv_file)) {
+  stop(
+    "EnergyPlus CSV not found: ", csv_file,
+    "\nPlace the file in the sims/ folder or update csv_file in the data-import chunk.",
+    call. = FALSE
+  )
+}
+ep_raw <- read.csv(csv_file, header = TRUE, stringsAsFactors = FALSE)
+```
+
+```{r data-setup, include=FALSE}
+process_df <- function(df,config, simulation_year = 2023) {
+  if (!"Date.Time" %in% names(df)) {
+    stop("Expected a 'Date.Time' column. Inspect names(ep_raw) and update the adapter.")
+  }
+  # Model-specific source zone names. Update this map for your EnergyPlus model. 
+  ###User inputs########################
+  source_zone_map <- c(
+    CORE_ZN = "core",
+    PERIMETER_ZN_1 = "south",
+    PERIMETER_ZN_2 = "east",
+    PERIMETER_ZN_3 = "north",
+    PERIMETER_ZN_4 = "west"
+  )
+  # Source variable-name patterns. Update these if output variable names differ.
+  source_variable_patterns <- c(
+    occupancy = "Occupant\\.Count",
+    top = "Operative\\.Temperature",
+    rh = "Air\\.Relative\\.Humidity",
+    pmv = "Thermal\\.Comfort\\.Fanger\\.Model\\.PMV"
+  )
+  datetime_text <- paste0(simulation_year, "/", str_squish(as.character(df[["Date.Time"]])))
+  datetime_end <- as.POSIXct(datetime_text, format = "%Y/%m/%d %H:%M:%S", tz = "UTC")
+  if (all(is.na(datetime_end))) {
+    stop("Could not parse Date.Time. Inspect unique(df[['Date.Time']]) and update the format string.")
+  }
+  if (any(is.na(datetime_end))) {
+    warning(sum(is.na(datetime_end)), " Date.Time value(s) could not be parsed and were dropped.")
+    keep <- !is.na(datetime_end)
+    df <- df[keep, , drop = FALSE]
+    datetime_end <- datetime_end[keep]
+  }
+  # Reporting interval in seconds (3600 for hourly output), inferred from the data.
+  step_sec <- stats::median(as.numeric(diff(sort(unique(datetime_end))), units = "secs"))
+  if (!is.finite(step_sec) || step_sec <= 0) {
+    stop("Could not infer the reporting interval from Date.Time.")
+  }
+  if (step_sec != 3600) {
+    warning("Reporting interval is ", step_sec / 60, " min, not hourly. ",
+            "The carpet plots assume one row per hour; aggregate to hourly first.")
+  }
+  datetime <- datetime_end - step_sec  # interval start
+  # Identify zone-specific source columns, typically e.g. PERIMETER_ZN_1:... or PERIMETER_ZN_1....
+  zone_pattern <- paste0("^(", paste(names(source_zone_map), collapse = "|"), ")[:.]\\s*")
+  zone_cols <- names(df)[str_detect(names(df), regex(zone_pattern))]
+  if (!length(zone_cols)) {
+    stop("No zone-specific columns matched the source-zone map. Inspect names(ep_raw) and update source_zone_map.")
+  }
+  base <- tibble(
+    datetime = datetime,
+    datetime_end = datetime_end,
+      oat = if ("Environment.Site.Outdoor.Air.Drybulb.Temperature..C..Hourly." %in% names(df))
+        suppressWarnings(as.numeric(df[["Environment.Site.Outdoor.Air.Drybulb.Temperature..C..Hourly."]])) else NA_real_,
+    o_rh = if ("Environment.Site.Outdoor.Air.Relative.Humidity.....Hourly." %in% names(df))
+        suppressWarnings(as.numeric(df[["Environment.Site.Outdoor.Air.Relative.Humidity.....Hourly."]])) else NA_real_
+  )
+  zone_long <- df |>
+    mutate(.datetime = datetime) |>
+    select(.datetime, all_of(zone_cols)) |>
+    pivot_longer(-.datetime, names_to = "source_name", values_to = "value") |>
+    mutate(
+      source_zone = str_match(source_name, zone_pattern)[, 2],
+      zone_id = unname(source_zone_map[source_zone]),
+      variable = case_when(
+        str_detect(source_name, source_variable_patterns[["occupancy"]]) ~ "occupancy",
+        str_detect(source_name, source_variable_patterns[["top"]]) ~ "top",
+        str_detect(source_name, source_variable_patterns[["rh"]]) ~ "rh",
+        str_detect(source_name, source_variable_patterns[["pmv"]]) ~ "pmv",
+        TRUE ~ NA_character_
+      ),
+      value = suppressWarnings(as.numeric(value))
+    ) |>
+    filter(!is.na(zone_id), !is.na(variable)) |>
+    select(datetime = .datetime, zone_id, variable, value) |>
+    pivot_wider(names_from = variable, values_from = value)
+  for (nm in c("occupancy", "top", "pmv", "rh")) {
+    if (!nm %in% names(zone_long)) zone_long[[nm]] <- NA_real_
+  }
+  zone_long |>
+    left_join(base, by = "datetime") |>
+    mutate(
+      zone_id = factor(zone_id, levels = config$zone_order),
+      zone_label = unname(config$zones[as.character(zone_id)]),
+      date = as.Date(datetime),
+      month = lubridate::month(datetime, label = TRUE, abbr = TRUE),
+      month_num = lubridate::month(datetime),
+      hour = lubridate::hour(datetime),  # start hour of the interval, 0-23
+      hour_day = hour,
+      doy = lubridate::yday(datetime),
+      pmv_clamped = if_else(is.na(pmv), NA_real_, pmax(pmin(pmv, config$pmv_clamp), -config$pmv_clamp)),
+      pmv_band = case_when(
+        is.na(pmv_clamped) ~ NA_character_,
+        pmv_clamped < -config$pmv_severe ~ "Cold",
+        pmv_clamped < -config$pmv_comfort ~ "Cool",
+        pmv_clamped <= config$pmv_comfort ~ "Comfortable",
+        pmv_clamped <= config$pmv_severe ~ "Warm",
+        TRUE ~ "Hot"
+      ),
+      comfort_category = case_when(
+        is.na(pmv_clamped) ~ NA_character_,
+        pmv_clamped < -config$pmv_comfort ~ "Cool Discomfort",
+        pmv_clamped <= config$pmv_comfort ~ "Comfortable",
+        TRUE ~ "Warm Discomfort"
+      )
+    ) |>
+    arrange(datetime, zone_id)
+}
+data <- process_df(ep_raw, config, simulation_year = params$simulation_year)
+```
+
+
+```{r validate, include=FALSE}
+validate_energyplus_data <- function(data, config) {
+  required_cols <- c("datetime", "zone_id", "zone_label", "occupancy", "top", "pmv", "oat", "date", "month", "hour", "pmv_clamped", "comfort_category")
+  missing <- setdiff(required_cols, names(data))
+  if (length(missing)) stop("Standardized data are missing: ", paste(missing, collapse = ", "))
+  if (!nrow(data)) stop("Standardized data contain no rows.")
+  if (anyDuplicated(data[c("datetime", "zone_id")])) {
+    warning("Duplicate datetime-zone rows found. Check the CSV reporting frequency and source-column mapping.")
+  }
+  if (any(is.na(data$datetime))) stop("Standardized data contain missing datetimes.")
+  if (any(data$hour < 0 | data$hour > 23)) stop("Hour values must be 0-23 (interval start).")
+  if (dplyr::n_distinct(lubridate::year(data$datetime)) > 1) {
+    warning("Data span more than one calendar year. Check simulation_year and the RunPeriod.")
+  }
+  if (config$occupied_start_hour < 0 || config$occupied_end_hour > 24 ||
+      config$occupied_start_hour >= config$occupied_end_hour) {
+    stop("occupied_start_hour/occupied_end_hour must satisfy 0 <= start < end <= 24.")
+  }
+  observed_zones <- unique(as.character(data$zone_id))
+  observed_zones <- observed_zones[!is.na(observed_zones)]
+  if (!all(observed_zones %in% names(config$zones))) stop("Unexpected zone IDs found in standardized data.")
+  invisible(data)
+}
+validate_energyplus_data(data, config)
+# Quick diagnostic tables to help verify that the source adapter is correct.
+knitr::kable(data |> count(zone_id, zone_label, name = "rows"), caption = "Rows available by zone")
+summary(data |> select(top, pmv, occupancy, oat))
+```
+
+
+```{r plot-helpers, include=FALSE}
+theme_ep <- function(config) {
+  theme_minimal(base_size = config$base_size) +
+    theme(plot.title = element_text(size = config$base_size + 2, face = "bold"),
+      plot.subtitle = element_text(size = config$base_size - 1, colour = "grey35"),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold", hjust = 0),
+      axis.title = element_text(colour = "grey25"))
+}
+occupied_rows <- function(data) {data |> filter(!is.na(occupancy), occupancy > 0)}
+# --- Shared carpet-plot (hour x day) helpers --------------------------------
+in_hour_window <- function(data, config) {
+  data |> filter(hour >= config$occupied_start_hour,
+           hour <  config$occupied_end_hour)
+}
+# Keep weekdays only when config$heatmap_weekdays_only is TRUE
+weekday_rows <- function(data, config) {
+  if (!isTRUE(config$heatmap_weekdays_only)) return(data)
+  data |> filter(lubridate::wday(datetime, week_start = 1) <= 5)
+}
+# Y-axis breaks every 3 h that always include both ends of the window
+hour_breaks <- function(config, by = 3) {
+  start <- config$occupied_start_hour
+  end <- config$occupied_end_hour
+  b <- seq(start, end, by = by)
+  if (tail(b, 1) != end) {
+    if (end - tail(b, 1) < by / 2) b[length(b)] <- end else b <- c(b, end)
+  }
+  b
+}
+scale_y_hours <- function(config) {
+  scale_y_continuous(
+    breaks = hour_breaks(config),
+    limits = c(config$occupied_start_hour, config$occupied_end_hour),
+    expand = c(0, 0)
+  )
+}
+add_plot_day <- function(heat) {
+  heat |>
+    distinct(datetime, .keep_all = TRUE) |>
+    arrange(datetime) |>
+    mutate(plot_date = date,
+           plot_day = dense_rank(plot_date))
+}
+month_centers_for <- function(heat) {
+  heat |>
+    distinct(plot_day, plot_date) |>
+    mutate(month_num = lubridate::month(plot_date)) |>
+    group_by(month_num) |>
+    summarise(center = mean(plot_day), .groups = "drop")
+}
+zone_factor <- function(data, config) {
+  data |>
+    mutate(
+      zone_id = factor(as.character(zone_id), levels = config$zone_order),
+      zone_label = factor(unname(config$zones[as.character(zone_id)]),
+                          levels = unname(config$zones[config$zone_order]))
+    )
+}
+save_ep_plot <- function(plot, filename, config, width = 10, height = 5) {
+  if (isTRUE(config$save_plots)) {
+    dir.create(config$output_dir, recursive = TRUE, showWarnings = FALSE)
+    ggsave(
+      filename = file.path(config$output_dir, filename), plot = plot,
+      width = width, height = height, dpi = config$dpi, bg = config$plot_bg
+    )
+  }
+  plot
+}
+summarize_zone_comfort <- function(data, config) {
+  occupied_rows(data) |>
+    filter(!is.na(pmv_clamped)) |>
+    group_by(zone_id, zone_label) |>
+    summarise(
+      comfortable = mean(abs(pmv_clamped) <= config$pmv_comfort),
+      cool = mean(pmv_clamped < -config$pmv_comfort),
+      warm = mean(pmv_clamped > config$pmv_comfort),
+      n_hours = dplyr::n(),
+      .groups = "drop"
+    ) |>
+    zone_factor(config)
+}
+```
+
+
+```{r plot-functions, include=FALSE}
+# Stacked bar chart: share of occupied hours that are cool, comfortable, or warm by zone
+summarize_pmv_bands <- function(data, config) {
+  band_levels <- c("Cold", "Cool", "Comfortable", "Warm", "Hot")
+  comfort_levels <- c("Cool", "Comfortable", "Warm")
+  band_tbl <- occupied_rows(data) |>
+    filter(!is.na(pmv_clamped)) |>
+    mutate(
+      band = factor(pmv_band, levels = band_levels),
+      zone_label = factor(zone_label, levels = unname(config$zones[config$zone_order]))
+    ) |>
+    count(zone_label, band, .drop = FALSE) |>
+    group_by(zone_label) |>
+    mutate(share = if (sum(n) > 0) n / sum(n) else rep(0, dplyr::n())) |>
+    ungroup()
+  zone_comfort_tbl <- band_tbl |>
+    mutate(
+      comfort_category = case_when(
+        band %in% c("Cold", "Cool") ~ "Cool",
+        band == "Comfortable" ~ "Comfortable",
+        band %in% c("Warm", "Hot") ~ "Warm"
+      ) |> factor(levels = comfort_levels)
+    ) |>
+    count(zone_label, comfort_category, wt = n, name = "n", .drop = FALSE) |>
+    group_by(zone_label) |>
+    mutate(share = if (sum(n) > 0) n / sum(n) else 0) |>
+    ungroup()
+  overall_tbl <- zone_comfort_tbl |>
+    group_by(comfort_category) |>
+    summarise(n = sum(n), .groups = "drop") |>
+    mutate(zone_label = "Overall") |>
+    group_by(zone_label) |>
+    mutate(share = if (sum(n) > 0) n / sum(n) else 0) |>
+    ungroup()
+  comfort_tbl <- bind_rows(zone_comfort_tbl, overall_tbl) |>
+    mutate(zone_label = factor(
+      as.character(zone_label),
+      levels = c(unname(config$zones[config$zone_order]), "Overall")
+    ))
+  comfort_tbl
+}
+plot_pmv_bands <- function(data, config) {
+  comfort_cols <- c(Cool = "#82C6ED", Comfortable = "#c9e0b0", Warm = "#EB6B58")
+  comfort_levels <- c("Cool", "Comfortable", "Warm")
+  comfort_tbl <- summarize_pmv_bands(data, config)
+  p <- ggplot(comfort_tbl, aes(x = share, y = fct_rev(zone_label), fill = comfort_category)) +
+    geom_col(
+      width = 0.85,
+      colour = "white",
+      linewidth = 0.4,
+      position = position_stack(reverse = TRUE)
+    ) +
+    scale_x_continuous(labels = scales::label_percent(), limits = c(0, 1)) +
+    scale_fill_manual(values = comfort_cols, breaks = comfort_levels, drop = FALSE, name = NULL) +
+    labs(title = "Comfort breakdown by zone and overall",
+         subtitle = "Share of occupied hours in each comfort category; Overall aggregates all zones",
+         x = "% of occupied hours", y = NULL) + theme_ep(config) +
+  theme(legend.position = "bottom")
+  save_ep_plot(p, "pmv_band_stacked.png", config, width = 10, height = 4.5)
+}
+# Plot operative temperature distribution by zone
+plot_top_distribution <- function(data, config) {
+  top_long <- occupied_rows(data) |>
+    filter(!is.na(top)) |>
+    mutate(zone_label = factor(zone_label, levels = unname(config$zones[config$zone_order])))
+  summary_tbl <- top_long |>
+    group_by(zone_label) |>
+    summarise(
+      hours_in_range = sum(dplyr::between(top, config$top_band[1], config$top_band[2])),
+      total_hours = dplyr::n(),
+      pct_hours_in_range = if_else(total_hours > 0, hours_in_range / total_hours, NA_real_),
+      .groups = "drop"
+    )
+  p <- ggplot(top_long, aes(top, fill = zone_label)) +
+    geom_histogram(aes(y = after_stat(density)), bins = 80, linewidth = 0.2,
+                   position = "identity", show.legend = FALSE, alpha = 0.55) +
+    geom_vline(xintercept = config$top_band, linetype = "dashed", colour = "grey45", linewidth = 0.4) +
+    facet_wrap(~zone_label, ncol = 1) +
+    scale_fill_manual(values = config$zone_colors, na.value = "grey70") +
+    scale_x_continuous(breaks = c(18, 20, 22, 24, 26, 28)) +
+    labs(title = "Occupied-hour operative temperature by zone",
+         subtitle = sprintf("Dashed lines show %.1f–%.1f °C", config$top_band[1], config$top_band[2]),
+         x = "Operative temperature (°C)", y = "Density") + theme_ep(config)
+  save_ep_plot(p, "operative_temperature_distribution.png", config, width = 9, height = 8)
+  list(plot = p, summary = summary_tbl)
+}
+# Stacked bar chart: share of occupied hours within the operative-temperature bands by zone
+summarize_top_bands <- function(data, config) {
+  band_levels <- c(
+    sprintf("Below %.1f°C", config$top_band[1]),
+    sprintf("%.1f–%.1f°C", config$top_band[1], config$top_band[2]),
+    sprintf("Above %.1f°C", config$top_band[2])
+  )
+  top_tbl <- occupied_rows(data) |>
+    filter(!is.na(top)) |>
+    mutate(
+      temperature_band = case_when(
+        top < config$top_band[1] ~ band_levels[1],
+        top <= config$top_band[2] ~ band_levels[2],
+        TRUE ~ band_levels[3]
+      ),
+      temperature_band = factor(temperature_band, levels = band_levels),
+      zone_label = factor(zone_label,
+        levels = unname(config$zones[config$zone_order])
+      )
+    ) |>
+    count(zone_label, temperature_band, .drop = FALSE) |>
+    complete(zone_label, temperature_band = factor(band_levels, levels = band_levels),
+      fill = list(n = 0)
+    )
+  zone_top_tbl <- top_tbl |>
+    group_by(zone_label) |>
+    mutate(share = if (sum(n) > 0) n / sum(n) else 0) |>
+    ungroup()
+  overall_top_tbl <- zone_top_tbl |>
+    group_by(temperature_band) |>
+    summarise(n = sum(n), .groups = "drop") |>
+    mutate(zone_label = "Overall") |>
+    group_by(zone_label) |>
+    mutate(share = if (sum(n) > 0) n / sum(n) else 0) |>
+    ungroup()
+  bind_rows(zone_top_tbl, overall_top_tbl) |>
+    mutate(zone_label = factor(
+      as.character(zone_label),
+      levels = c(unname(config$zones[config$zone_order]), "Overall")
+    ))
+}
+plot_top_bands <- function(data, config) {
+  top_cols <- setNames(
+    c("#82C6ED", "#f0f0f0", "#EB6B58"),
+    c(sprintf("Below %.1f°C", config$top_band[1]),
+      sprintf("%.1f–%.1f°C", config$top_band[1], config$top_band[2]),
+      sprintf("Above %.1f°C", config$top_band[2]) ))
+  top_tbl <- summarize_top_bands(data, config)
+  p <- ggplot(top_tbl, aes(x = share, y = fct_rev(zone_label), fill = temperature_band)) +
+    geom_col(
+      width = 0.85,
+      colour = "white",
+      linewidth = 0.4,
+      position = position_stack(reverse = TRUE)
+    ) +
+    scale_x_continuous(labels = scales::label_percent(), limits = c(0, 1)) +
+    scale_fill_manual(values = top_cols, breaks = names(top_cols), name = NULL) +
+    labs(
+      title = "Operative-temperature breakdown by zone and overall",
+      subtitle = "Share of occupied hours in each operative-temperature band",
+      x = "% of occupied hours",
+      y = NULL
+    ) +
+    theme_ep(config) +
+    theme(legend.position = "bottom")
+  save_ep_plot(p, "top_band_stacked.png", config, width = 10, height = 4.5)
+}
+# Plot monthly operative temperature distribution by zone
+plot_monthly_top <- function(data, config) {
+  monthly <- occupied_rows(data) |>
+    filter(!is.na(top), !is.na(month_num)) |>
+    group_by(zone_label, month_num, month) |>
+    summarise(p05 = quantile(top, 0.05, na.rm = TRUE),
+      p25 = quantile(top, 0.25, na.rm = TRUE),
+      median = quantile(top, 0.50, na.rm = TRUE),
+      p75 = quantile(top, 0.75, na.rm = TRUE),
+      p95 = quantile(top, 0.95, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(month = factor(as.character(month), levels = month.abb))
+  p <- ggplot(monthly, aes(y = month)) +
+    annotate("rect", xmin = config$top_band[1], xmax = config$top_band[2],
+             ymin = -Inf, ymax = Inf, fill = "grey45", alpha = 0.25) +
+    geom_errorbar(aes(xmin = p05, xmax = p95), height = 0.25,
+                  colour = "#4D4D4D", linewidth = 0.6, orientation = "y") +
+    #geom_errorbar(aes(xmin = p25, xmax = p75), height = 0.25, linewidth = 2,
+    #              colour = "grey45", orientation = "y") +
+    geom_point(aes(x = median), size = 1.8, colour = "#1F1F1F") +
+    facet_wrap(~zone_label, nrow = 1) +
+    labs(title = "Monthly operative-temperature distribution",
+         subtitle = "Whiskers: 5th–95th percentiles, dot: median",
+         x = "Operative temperature (°C)", y = NULL) + theme_ep(config)
+  save_ep_plot(p, "top_monthly_boxplots.png", config,
+               width = 10, height = 2 + 1.5 * dplyr::n_distinct(monthly$zone_label))
+}
+```
+
+
+```{r plot-annual-heatmap-function, include=FALSE}
+plot_annual_heatmap <- function(data, config, zone = config$selected_zone,
+                                bar_gap = 7, bar_width = 15,
+                                save_plot = TRUE) {
+  if (!zone %in% names(config$zones)) {
+    stop("Unknown zone ID: ", zone)
+  }
+  # ---------------------------------------------------------
+  # 1. Prepare and filter data
+  # ---------------------------------------------------------
+  category_levels <- c(
+    "Cool Discomfort",
+    "Comfortable",
+    "Warm Discomfort"
+  )
+  heat <- data |>
+    dplyr::filter(
+      as.character(zone_id) == zone,
+      !is.na(pmv_clamped),
+      !is.na(occupancy),
+      occupancy > 0
+    ) |>
+    in_hour_window(config) |>
+    weekday_rows(config) |>
+    dplyr::mutate(
+      pmv_band = dplyr::case_when(
+        pmv_clamped < -config$pmv_comfort ~ category_levels[1],
+        pmv_clamped <= config$pmv_comfort ~ category_levels[2],
+        TRUE ~ category_levels[3]
+      )
+    ) |>
+    add_plot_day()
+  if (nrow(heat) == 0) {
+    stop("No rows remain for the selected zone and heatmap filters.")
+  }
+  # ---------------------------------------------------------
+  # 2. Calculate PMV category percentages
+  # ---------------------------------------------------------
+  category_pct <- heat |>
+    dplyr::count(pmv_band) |>
+    tidyr::complete(
+      pmv_band = category_levels,
+      fill = list(n = 0)
+    ) |>
+    dplyr::mutate(
+      pct = n / sum(n),
+      pmv_band = factor(pmv_band, levels = category_levels)
+    ) |>
+    dplyr::arrange(pmv_band)
+  # ---------------------------------------------------------
+  # 3. Month label positions
+  # ---------------------------------------------------------
+  month_centers <- month_centers_for(heat)
+  # ---------------------------------------------------------
+  # 4. Category colors
+  # ---------------------------------------------------------
+  band_cols <- c(
+    "Cool Discomfort" = "#82C6ED",
+    "Comfortable" = "#c9e0b0",
+    "Warm Discomfort" = "#EB6B58"
+  )
+  # ---------------------------------------------------------
+  # 5. Percentage bar position
+  # ---------------------------------------------------------
+  heat_max <- max(heat$plot_day)
+  bar_xmin <- heat_max + 0.5 + bar_gap
+  bar_xmax <- bar_xmin + bar_width
+  bar_xmid <- (bar_xmin + bar_xmax) / 2
+  # Match the percentage bar height to the displayed hour window
+  y0 <- config$occupied_start_hour
+  hour_range <- config$occupied_end_hour - config$occupied_start_hour
+  bar_data <- category_pct |>
+    dplyr::mutate(
+      label = stringr::str_wrap(
+        sprintf(
+          "%s (%.1f%%)",
+          as.character(pmv_band),
+          100 * pct
+        ),
+        width = 14
+      ),
+      ymin = dplyr::lag(cumsum(pct), default = 0),
+      ymax = cumsum(pct),
+      ymin_plot = y0 + ymin * hour_range,
+      ymax_plot = y0 + ymax * hour_range,
+      xmid = bar_xmid,
+      fill_col = unname(band_cols[as.character(pmv_band)])
+    )
+  # ---------------------------------------------------------
+  # 6. Build combined single-ggplot visualization
+  # ---------------------------------------------------------
+  combined <- ggplot2::ggplot(
+    heat,
+    ggplot2::aes(
+      x = plot_day,
+      y = hour + 0.5,
+      fill = pmv_band
+    )
+  ) +
+    # PMV categorical heatmap
+    ggplot2::geom_tile(
+      width = 1,
+      height = 1
+    ) +
+    # Percentage bar
+    ggplot2::geom_rect(
+      data = bar_data,
+      ggplot2::aes(
+        xmin = bar_xmin,
+        xmax = bar_xmax,
+        ymin = ymin_plot,
+        ymax = ymax_plot
+      ),
+      inherit.aes = FALSE,
+      fill = bar_data$fill_col,
+      colour = "white",
+      linewidth = 0.4
+    ) +
+    # Percentage labels
+    ggplot2::geom_text(
+      data = dplyr::filter(bar_data, pct > 0),
+      ggplot2::aes(
+        x = xmid,
+        y = (ymin_plot + ymax_plot) / 2,
+        label = label
+      ),
+      inherit.aes = FALSE,
+      size = 3.5,
+      lineheight = 0.9
+    ) +
+    # PMV category color scale
+    ggplot2::scale_fill_manual(
+      values = band_cols,
+      breaks = category_levels,
+      labels = sprintf(
+        "%s (%.1f%%)",
+        category_levels,
+        100 * category_pct$pct
+      ),
+      drop = FALSE,
+      name = "PMV category"
+    ) +
+    # Shared x-axis
+    ggplot2::scale_x_continuous(
+      breaks = month_centers$center,
+      labels = month.abb[month_centers$month_num],
+      limits = c(0.5, bar_xmax),
+      expand = c(0, 0)
+    ) +
+    # Shared y-axis
+    scale_y_hours(config) +
+    ggplot2::labs(
+      title = paste(
+        "Annual PMV heatmap —",
+        config$zones[[zone]],
+        "zone"
+      ),
+      x = "Month",
+      y = "Hour of day"
+    ) +
+    theme_ep(config) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      legend.position = "none",
+      plot.title = ggplot2::element_text(
+        hjust = 0.5,
+        size = config$base_size + 1
+      )
+    )
+  # ---------------------------------------------------------
+  # 7. Save plot
+  # ---------------------------------------------------------
+  if (save_plot) {
+    save_ep_plot(
+      combined,
+      paste0("annual pmv heatmap ", zone, ".png"),
+      config,
+      width = 15,
+      height = 5
+    )
+  }
+  return(combined)
+}
+```
+
+
+
+```{r plot-annual_top_heatmap-function, , include=FALSE}
+plot_annual_top_heatmap <- function(data, config, zone = config$selected_zone,
+                                    top_cool = 20, top_warm = 25,
+                                    temp_limits = c(15, 30),
+                                    bar_gap = 3, bar_width = 20,
+                                    save_plot = TRUE) {
+  if (!zone %in% names(config$zones)) {
+    stop("Unknown zone ID: ", zone)
+  }
+  if (top_cool >= top_warm) stop("top_cool must be lower than top_warm.")
+  # ---------------------------------------------------------
+  # 1. Prepare and filter data
+  # ---------------------------------------------------------
+  # Band labels follow the thresholds, so changing top_cool/top_warm keeps
+  # the bar labels and counts consistent.
+  fmt <- function(x) format(x, trim = TRUE, drop0trailing = TRUE)
+  band_levels <- c(
+    paste0("Below ", fmt(top_cool), "°C"),
+    paste0(fmt(top_cool), "–", fmt(top_warm), "°C"),
+    paste0("Above ", fmt(top_warm), "°C")
+  )
+  heat <- data |>
+    dplyr::filter(
+      as.character(zone_id) == zone,
+      !is.na(top),
+      !is.na(occupancy),
+      occupancy > 0
+    ) |> in_hour_window(config) |>
+    weekday_rows(config) |>
+    dplyr::mutate(
+      temp_band = dplyr::case_when(
+        top < top_cool ~ band_levels[1],
+        top <= top_warm ~ band_levels[2],
+        TRUE ~ band_levels[3])) |>
+    add_plot_day()
+  if (nrow(heat) == 0) {
+    stop("No rows remain for the selected zone and heatmap filters.")
+  }
+  # ---------------------------------------------------------
+  # 2. Calculate temperature category percentages
+  #    (same rows that are drawn in the heatmap)
+  # ---------------------------------------------------------
+  band_pct <- heat |>
+    dplyr::count(temp_band) |>
+    tidyr::complete(temp_band = band_levels, fill = list(n = 0)) |>
+    dplyr::mutate(
+      pct = n / sum(n),
+      temp_band = factor(temp_band, levels = band_levels)
+    ) |> dplyr::arrange(temp_band)
+  # ---------------------------------------------------------
+  # 3. Month label positions
+  # ---------------------------------------------------------
+  month_centers <- month_centers_for(heat)
+  # ---------------------------------------------------------
+  # 4. Category colors for the percentage bar
+  # ---------------------------------------------------------
+  band_cols <- setNames(c("#82C6ED", "#f0f0f0", "#EB6B58"), band_levels)
+  # ---------------------------------------------------------
+  # 5. Percentage bar position
+  # ---------------------------------------------------------
+  heat_max <- max(heat$plot_day)
+  bar_gap <- 3
+  bar_width <- 20
+  bar_xmin <- heat_max + 0.5 + bar_gap   # +0.5 = right edge of the last tile
+  bar_xmax <- bar_xmin + bar_width
+  bar_xmid <- (bar_xmin + bar_xmax) / 2
+  # Map percentages onto the displayed hour window. The tiles fill exactly
+  # [occupied_start_hour, occupied_end_hour], so the bar matches their height.
+  y0 <- config$occupied_start_hour
+  hour_range <- config$occupied_end_hour - config$occupied_start_hour
+  bar_data <- band_pct |>
+    dplyr::mutate(
+      label = stringr::str_wrap(
+        sprintf("%s (%.1f%%)", as.character(temp_band), 100 * pct),
+        width = 14
+      ),
+      ymin = dplyr::lag(cumsum(pct), default = 0),
+      ymax = cumsum(pct),
+      ymin_plot = y0 + ymin * hour_range,
+      ymax_plot = y0 + ymax * hour_range,
+      xmid = bar_xmid,
+      fill_col = unname(band_cols[as.character(temp_band)])
+    )
+  # ---------------------------------------------------------
+  # 6. Build combined single-ggplot visualization
+  # ---------------------------------------------------------
+  combined <- ggplot2::ggplot(
+    heat,
+    # Tile for interval [hour, hour + 1) is centred on hour + 0.5
+    ggplot2::aes(x = plot_day, y = hour_day + 0.5, fill = top)
+  ) +
+    # Continuous operative temperature heatmap
+    ggplot2::geom_tile(width = 1, height = 1) +
+    # Percentage bar (one rectangle per band, fixed colours)
+    ggplot2::geom_rect(
+      data = bar_data,
+      ggplot2::aes(xmin = bar_xmin, xmax = bar_xmax,
+                   ymin = ymin_plot, ymax = ymax_plot),
+      inherit.aes = FALSE,
+      fill = bar_data$fill_col,
+      colour = "white",
+      linewidth = 0.4
+    ) +
+    # Percentage labels
+    ggplot2::geom_text(
+      data = dplyr::filter(bar_data, pct > 0),
+      ggplot2::aes(x = xmid, y = (ymin_plot + ymax_plot) / 2, label = label),
+      inherit.aes = FALSE,
+      size = 3.5,
+      lineheight = 0.9
+    ) +
+    # Continuous temperature color scale
+    ggplot2::scale_fill_stepsn(
+      colours = c("#1d60f0", "#82C6ED", "#f0f0f0", "#EB6B58", "#B44A4A"),
+      breaks = c(18, 20, 25, 26, 28),
+      limits = temp_limits,
+      oob = scales::squish,
+      name = "Operative temperature (°C)"
+    ) +
+    # Shared x-axis
+    ggplot2::scale_x_continuous(
+      breaks = month_centers$center,
+      labels = month.abb[month_centers$month_num],
+      limits = c(0.5, bar_xmax),
+      expand = c(0, 0)
+    ) +
+    # Shared y-axis: same window as the tiles and the bar
+    scale_y_hours(config) +
+    ggplot2::labs(
+      title = paste("Operative temperature heatmap —", config$zones[[zone]], "zone"),
+      x = "Month",
+      y = "Hour of day"
+    ) +
+    theme_ep(config) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      legend.position = "none",
+      plot.title = ggplot2::element_text(hjust = 0.5, size = config$base_size + 1)
+    )
+  # ---------------------------------------------------------
+  # 7. Save plot
+  # ---------------------------------------------------------
+  if (save_plot) {
+    save_ep_plot(
+      combined,
+      paste0("annual operative temperature heatmap ", zone, ".png"),
+      config,
+      width = 15,
+      height = 5
+    )
+  }
+  return(combined)
+}
+```
+
+```{r plot-annual rh heatmap-function, include=FALSE}
+plot_annual_rh_heatmap <- function(
+    data,
+    config,
+    zone = config$selected_zone,
+    rh_limits = c(0, 100),
+    rh_breaks = seq(0, 100, by = 30),
+    bar_gap = 7,
+    bar_width = 15,
+    save_plot = FALSE,
+    filename = NULL
+) {
+  # ----------------------------------------------------------
+  # 1. Validate inputs
+  # ----------------------------------------------------------
+  if (!zone %in% names(config$zones)) {
+    stop("`zone` must match a zone ID in `config$zones`.")
+  }
+  required_cols <- c("datetime", "zone_id", "rh", "occupancy")
+  missing_cols <- setdiff(required_cols, names(data))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing required columns: ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+  if (length(rh_limits) != 2 || rh_limits[1] >= rh_limits[2]) {
+    stop("`rh_limits` must contain increasing minimum and maximum values.")
+  }
+  # ----------------------------------------------------------
+  # 2. Filter data
+  # ----------------------------------------------------------
+  heat <- data |>
+    dplyr::filter(
+      as.character(zone_id) == zone,
+      !is.na(datetime),
+      !is.na(rh),
+      !is.na(occupancy),
+      occupancy > 0
+    ) |>
+    in_hour_window(config) |>
+    weekday_rows(config)
+  if (nrow(heat) == 0) {
+    stop("No data remain after applying the zone, occupancy, and time filters.")
+  }
+  # ----------------------------------------------------------
+  # 3. Prepare heatmap data and month labels
+  # ----------------------------------------------------------
+  heat <- add_plot_day(heat)
+  month_labels <- heat |>
+    dplyr::distinct(plot_day, plot_date) |>
+    dplyr::mutate(
+      month = format(plot_date, "%b"),
+      month_start = lubridate::floor_date(plot_date, "month")
+    ) |>
+    dplyr::group_by(month_start, month) |>
+    dplyr::summarise(
+      xmin = min(plot_day),
+      xmax = max(plot_day),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      x_center = (xmin + xmax) / 2
+    )
+  # ----------------------------------------------------------
+  # 4. Define RH categories and calculate percentages
+  # ----------------------------------------------------------
+  rh_levels <- c("Low(<30%)", "Moderate(30%-70%)", "High(>70%)")
+  heat <- heat |>
+    dplyr::mutate(
+      rh_band = dplyr::case_when(
+        rh < 30 ~ "Low(<30%)",
+        rh <= 70 ~ "Moderate(30%-70%)",
+        TRUE ~ "High(>70%)"
+      ),
+      rh_band = factor(rh_band, levels = rh_levels)
+    )
+  rh_pct <- heat |>
+    dplyr::count(rh_band) |>
+    tidyr::complete(
+      rh_band = factor(rh_levels, levels = rh_levels),
+      fill = list(n = 0)
+    ) |>
+    dplyr::mutate(
+      pct = n / sum(n)
+    )
+  # ----------------------------------------------------------
+  # 5. Define category colors
+  # ----------------------------------------------------------
+  band_cols <- c(
+    "Low(<30%)" = "#e6f08d",
+    "Moderate(30%-70%)" = "#dd98e4",
+    "High(>70%)" = "#a836ac"
+  )
+  # ----------------------------------------------------------
+  # 6. Percentage bar position
+  # ----------------------------------------------------------
+  heat_max <- max(heat$plot_day)
+  bar_xmin <- heat_max + 0.5 + bar_gap
+  bar_xmax <- bar_xmin + bar_width
+  bar_xmid <- (bar_xmin + bar_xmax) / 2
+  # Match percentage bar height to displayed hour window
+  y0 <- config$occupied_start_hour
+  hour_range <- config$occupied_end_hour - config$occupied_start_hour
+  rh_bar_data <- rh_pct |>
+    dplyr::mutate(
+      label = stringr::str_wrap(
+        sprintf("%s\n(%.1f%%)", as.character(rh_band), 100 * pct),
+        width = 14
+      ),
+      ymin = dplyr::lag(cumsum(pct), default = 0),
+      ymax = cumsum(pct),
+      ymin_plot = y0 + ymin * hour_range,
+      ymax_plot = y0 + ymax * hour_range,
+      xmid = bar_xmid,
+      fill_col = unname(band_cols[as.character(rh_band)])
+    )
+  # ----------------------------------------------------------
+  # 7. Build combined single-ggplot visualization
+  # ----------------------------------------------------------
+  combined <- ggplot2::ggplot(
+    heat,
+    ggplot2::aes(
+      x = plot_day,
+      y = hour_day + 0.5,
+      fill = rh
+    )
+  ) +
+    # Continuous relative humidity heatmap
+    ggplot2::geom_tile(
+      width = 1,
+      height = 1
+    ) +
+    # Percentage bar
+    ggplot2::geom_rect(
+      data = rh_bar_data,
+      ggplot2::aes(
+        xmin = bar_xmin,
+        xmax = bar_xmax,
+        ymin = ymin_plot,
+        ymax = ymax_plot
+      ),
+      inherit.aes = FALSE,
+      fill = rh_bar_data$fill_col,
+      colour = "white",
+      linewidth = 0.4
+    ) +
+    # Percentage labels
+    ggplot2::geom_text(
+      data = dplyr::filter(rh_bar_data, pct > 0),
+      ggplot2::aes(
+        x = xmid,
+        y = (ymin_plot + ymax_plot) / 2,
+        label = label
+      ),
+      inherit.aes = FALSE,
+      size = 3.5,
+      lineheight = 0.9
+    ) +
+    # Continuous RH color scale
+    ggplot2::scale_fill_gradientn(
+      colours = c(
+        "#e6f08d",
+        "#dd98e4",
+        "#a836ac",
+        "#f76301"
+      ),
+      limits = rh_limits,
+      breaks = rh_breaks,
+      oob = scales::squish,
+      name = "Relative humidity (%)"
+    ) +
+    # Shared x-axis
+    ggplot2::scale_x_continuous(
+      breaks = month_labels$x_center,
+      labels = month_labels$month,
+      limits = c(0.5, bar_xmax),
+      expand = c(0, 0)
+    ) +
+    # Shared y-axis
+    scale_y_hours(config) +
+    ggplot2::labs(
+      title = paste(
+        "Annual Relative Humidity Heatmap —",
+        config$zones[[zone]],
+        "zone"
+      ),
+      x = "Month",
+      y = "Hour of day"
+    ) +
+    theme_ep(config) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_blank(),
+      legend.position = "none",
+      plot.title = ggplot2::element_text(
+        hjust = 0.5,
+        size = config$base_size + 1
+      )
+    )
+  # ----------------------------------------------------------
+  # 8. Save plot
+  # ----------------------------------------------------------
+    if (save_plot) {
+    save_ep_plot(
+      combined,
+      paste0("annual relative humidity heatmap ", zone, ".png"),
+      config,
+      width = 15,
+      height = 5
+    )
+  }
+  return(combined)
+}
+```
+```{r plot-event-function, include=FALSE}
+plot_event <- function(data, config, zone = config$selected_zone, start, days = 7,
+                       compare = "oat",                    # any column(s) in `data`
+                       compare_labels = c(oat = "Outdoor"), # display names, optional
+                       compare_panel = FALSE,              # FALSE: overlay on temperature panel
+                       compare_ylab = NULL,                # y label when compare_panel = TRUE
+                       pmv_ylim = config$pmv_ylim %||% c(-1.5, 1.5),
+                       title = NULL) {
+  if (!zone %in% names(config$zones)) stop("Unknown zone ID: ", zone)
+  bad <- setdiff(compare, names(data))
+  if (length(bad)) stop("Column(s) not found in data: ", paste(bad, collapse = ", "))
+  t0 <- as.POSIXct(start, tz = "UTC")
+  if (is.na(t0)) stop("Could not parse start; use e.g. '2025-01-15 00:00:00'.")
+  t1 <- t0 + days * 86400
+  zone_label <- config$zones[[zone]]
+  # Display labels for the comparison variables (fall back to the column name)
+  lab <- setNames(compare, compare)
+  hit <- intersect(names(compare_labels), compare)
+  lab[hit] <- compare_labels[hit]
+  ev <- data |>
+    filter(as.character(zone_id) == zone, !is.na(datetime), datetime >= t0, datetime < t1) |>
+    transmute(datetime, top, pmv = pmv_clamped,
+              occupied = !is.na(occupancy) & occupancy > 0,
+              across(all_of(compare)))
+  if (!nrow(ev)) stop("No event-period rows found for this zone/date.")
+  event_cols <- c(Cold = "#1c5cab", Cool = "#86b6ef", Comfortable = "#1b6f49",
+                  Warm = "#f2a3a2", Hot = "#c23434")
+  ev <- ev |>
+    arrange(datetime) |>
+    # Fill missing hours with NA so lines break instead of joining across gaps
+    complete(datetime = seq(t0, t1 - 3600, by = "hour")) |>
+    # `datetime` is the interval start; plot values at the interval midpoint
+    mutate(t_mid = datetime + 1800,
+           occupied = coalesce(occupied, FALSE),
+           band = cut(pmv, c(-Inf, -config$pmv_severe, -config$pmv_comfort,
+                             config$pmv_comfort, config$pmv_severe, Inf),
+                      labels = names(event_cols)))
+  occ_rect <- geom_rect(data = filter(ev, occupied),
+                        aes(xmin = datetime, xmax = datetime + 3600, ymin = -Inf, ymax = Inf),
+                        inherit.aes = FALSE, fill = "grey75", alpha = 0.25)
+  x_scale <- scale_x_datetime(date_breaks = "1 day", date_labels = "%a %d %b",
+                              limits = c(t0, t1), expand = c(0, 0))
+  cmp_cols <- setNames(rep_len(c("grey45", "grey15", "#8c6d31", "#6b6ecf"), length(compare)),
+                       unname(lab))
+  # ── Temperature panel: zone operative (+ comparison vars if overlaid) ──
+  temp_vars <- if (compare_panel) character() else compare
+  temp_names <- c(top = "Zone operative", lab)
+  temp_long <- ev |>
+    select(t_mid, top, all_of(temp_vars)) |>
+    pivot_longer(-t_mid) |>
+    mutate(name = factor(unname(temp_names[name]),
+                         levels = unname(temp_names[c("top", temp_vars)])))
+  p_temp <- ggplot(temp_long, aes(t_mid, value, colour = name)) +
+    occ_rect +
+    annotate("rect", xmin = t0, xmax = t1, ymin = config$top_band[1], ymax = config$top_band[2],
+             fill = "grey45", alpha = 0.25) +
+    geom_line(linewidth = 1, na.rm = TRUE) +
+    scale_colour_manual(values = c(`Zone operative` = "goldenrod3",
+                                   cmp_cols), name = NULL) +
+    x_scale + 
+    labs(y = "Temperature (°C)", x = NULL,
+         title = title %||% sprintf("%s zone, week of %s", zone_label, format(t0, "%d %b %Y")),
+         subtitle = "Grey shading = occupied hours; light band = illustrative operative-temperature range") +
+    theme_ep(config) +
+    theme(legend.position = "top", legend.justification = "left",
+          axis.text.x = element_blank())
+  # ── Optional separate panel for comparison vars in other units ──
+  p_cmp <- NULL
+  if (compare_panel) {
+    cmp_long <- ev |>
+      select(t_mid, all_of(compare)) |>
+      pivot_longer(-t_mid) |>
+      mutate(name = factor(unname(lab[name]), levels = unname(lab)))
+    p_cmp <- ggplot(cmp_long, aes(t_mid, value, colour = name)) +
+      occ_rect +
+      geom_line(linewidth = 1, na.rm = TRUE) +
+      scale_colour_manual(values = cmp_cols, name = NULL) +
+      x_scale +
+      labs(y = compare_ylab %||% paste(unname(lab), collapse = " / "), x = NULL) +
+      theme_ep(config) +
+      theme(legend.position = if (length(compare) > 1) "top" else "none",
+            legend.justification = "left")
+  }
+  # ── PMV panel ──
+  p_pmv <- ggplot(filter(ev, occupied, !is.na(pmv)), aes(t_mid, pmv)) +
+    occ_rect +
+    annotate("rect", xmin = t0, xmax = t1, ymin = -config$pmv_comfort, ymax = config$pmv_comfort,
+             fill = "grey45", alpha = 0.25) +
+    geom_hline(yintercept = 0, colour = "grey70", linewidth = 0.3) +
+    geom_point(aes(colour = band), size = 0.9) +
+    scale_colour_manual(values = event_cols, drop = FALSE, guide = "none") +
+    x_scale + scale_y_continuous(breaks = c(-0.5, 0.5)) +
+    coord_cartesian(ylim = pmv_ylim) +
+    labs(y = "PMV (occupied)", x = NULL) + theme_ep(config)
+  panels  <- Filter(Negate(is.null), list(p_temp, p_cmp, p_pmv))
+  heights <- if (compare_panel) c(1.4, 1, 1) else c(1.4, 1)
+  combined <- patchwork::wrap_plots(panels, ncol = 1, heights = heights) &
+    theme(plot.margin = margin(5, 25, 5, 5))
+  suffix <- if (identical(compare, "oat")) "" else paste0("_", paste(compare, collapse = "-"))
+  save_ep_plot(combined, paste0("event_", zone, "_", format(t0, "%Y%m%d"), suffix, ".png"),
+               config, width = 12, height = if (compare_panel) 9 else 7)
+  combined
+}
+```
+
+```{r inline-summary-values, include=FALSE}
+comfort_summary <- summarize_zone_comfort(data, config)
+z <- function(zone_label_value, metric) {
+  metric <- dplyr::recode(metric, comf = "comfortable")
+  value <- comfort_summary |>
+    filter(as.character(zone_label) == zone_label_value) |>
+    pull(all_of(metric))
+  scales::percent(value, accuracy = 1)
+}
+max_warm_share <- max(comfort_summary$warm, na.rm = TRUE)
+pmv_severe <- config$pmv_severe
+top_band <- config$top_band
+```
+
+
+# 1. Where does discomfort occur? {#where}
+
+Use this scorecard as a screening step to compare building-wide and zone-specific comfort performance and quickly pinpoint zones that may need further investigation.
+
+**Zone comfort scorecard** displays the overall comfort performance across the simulation runtime. Two options are featured below: a scorecard based on PMV bands [@fanger_thermal_1972], and a second based on indoor operative temperature bands.Each row represents a zone and the color bands indicate the share of occupied hours in each comfort category. PMV band between -0.5 to +0.5 PMV is considered comfortable; values below this band are classified as cool discomfort and above as warm discomfort. Operative temperature bands are set at <20°C (cool), 20–25°C (comfortable), and >25°C (warm). The comfort bands can be adjusted in the configuration file per project requirements.
+
+To interpret the results, compare the comfortable-hour share across zones, then check whether the remaining hours are mostly too cool or too warm. A zone that stands out from similar zones points to a zone-specific cause (orientation, glazing, exposure, an undersized terminal unit). When every zone shows the same pattern, potential causes for discomfort are likely building-wide, for example a setpoint or schedule issue. 
+
+```{r where-scorecard, fig.height=4, echo=FALSE}
+plot_pmv_bands(data, config)
+```
+
+```{r top-bands-scorecard, fig.height=4, echo=FALSE}
+plot_top_bands(data, config)
+```
+
+**In this example.** The core has the highest comfortable-hour share (`r z("Core","comf")`) in the PMV scorecard, while the north zone has the lowest (`r z("North","comf")`). The difference between the south (`r z("South","comf")`) and north (`r z("North","comf")`) zones reflects the impact of their different solar exposures. East and west have similar PMV band distributions.
+
+The operative-temperature scorecard shows similar patterns as the PMV but with higher share of occupied hours within the selected operative temperature band of 20–25°C. The difference between the PMV and operative-temperature scorecards are expected as the PMV comfort result is sensitive to occupant inputs (clothing and metabolic activity), which are not captured in the operative temperature calculation.
+
+# 2. When does discomfort occur? {#when}
+
+To identify when the a zone experiences comfortable, cool or warm discomfort, use carpet plots. Carpet plots display the comfort status of a selected zone over every simulation timestep to help visualize the temporal distribution of comfort conditions. carpet plots based on PMV bands and operative temperature bands and relative humidity are shown below. The carpet plots are accompanied by a percentage bar that shows the share of occupied hours in each comfort category. The carpet plots can be used to identify seasonal patterns and daily patterns during occupied hours. 
+
+### Daily and hourly pattern: carpet plots
+
+**Carpet plot** In this heatmap or carpet plot, each column is a day and each row is an hour. It shows both time-of-day patterns (morning start-up, afternoon solar gain) and seasonal patterns (summer vs. winter) simultaneously for the selected zone specified in the 'setup' and 'data-setup' chunks above. For the PMV carpet plot, blue color cells indicate PMV values below the comfort range (cool discomfort), green cells indicate PMV values within the comfort range, and red cells indicate PMV values above the comfort range (warm discomfort). For the operative temperature carpet plot, blue cells indicate temperatures below 20°C, white cells indicate temperatures within 20-25°C, and red gradient cells indicate temperatures above 25°C. Comparing both plots helps identify periods where discomfort may be driven by assumptions in the thermal comfort model (clothing, activity assumptions in PMV model) vs other factors such as solar gains, thermostat settings, or ventilation.
+
+```{r}
+print(plot_annual_heatmap(data, config,
+  bar_gap = 3,
+  bar_width = 20
+))
+```
+
+```{r annual-top-heatmap, fig.height=4.5, echo=FALSE}
+print(plot_annual_top_heatmap(
+  data, config,
+  bar_gap = 3,
+  bar_width = 20
+))
+```
+
+```{r annual-rh-heatmap, fig.height=4.5, echo=FALSE}
+print(plot_annual_rh_heatmap(
+  data, config,
+  bar_gap = 3,
+  bar_width = 20
+))
+```
+
+**In this example.** In winter (Nov–Mar), the north zone has cool discomfort mainly in the early morning and from about 19:00 onward. Operative temperature falls below 20 °C over the same hours, which points to slow morning warm-up and a schedule-driven drop in the evening. In summer (Jun–Sep), PMV shows warm discomfort from roughly 09:00 to 20:00, but operative temperature rarely goes above 25 °C (1.1% of hours). So the summer warm discomfort comes from the other PMV inputs such as clothing and activity levels rather than from air temperature alone.
+The relative humidity carpet plot shows that some days in winter the north zone experience low humidity in addition to low temperatures which may also be contributing to cool PMV band hours.
+
+# 3. How often does discomfort occur? {#how-often}
+Use the distribution plots below to compare each zone with a project-defined target, such as 80% of occupied hours within the selected comfort band or to compare design options. The target and the comfort criteria should be stated explicitly for the project.
+
+### Distribution of operative temperature
+
+**Operative-temperature distribution.** The histograms show the spread of occupied-hour temperatures and whether a zone has one or more common operating temperature ranges - another common comfort metric used in the literature [@carlucci_review_2012]. The illustrative reference band is shown with grey dotted lines and is set at `r sprintf("%.1f-%.1f", top_band[1], top_band[2])` °C. The accompanying table summarizes the share of occupied hours within this range for each zone.
+Bars outside the dashed lines show how often temperatures fall beyond the illustrative reference operative temperature band. A narrow peak indicates relatively consistent temperatures, while a broad distribution indicates greater variation. Two peaks can reflect different operating conditions, such as heating and cooling seasons.
+
+```{r topbox, fig.height = 7.5}
+top_distribution <- plot_top_distribution(data, config)
+top_distribution$plot
+```
+
+**In this example.** Each zone peaks near 24-25°C. Core and North zones hold cooling at 25°C, while South, East and West zones extend past this limit likely due to solar gain from walls and windows which raises the mean radiant temperature pushing operative temperature above the air setpoint. North,and west also show a secondary peak near 20–21 °C and a tail below 20 °C matching the cool discomfort share seen in the scorecard plot. 
+
+```{r temperature-summary-table}
+knitr::kable(top_distribution$summary |> mutate(
+  pct_hours_in_range = scales::percent(pct_hours_in_range, accuracy = 0.1)) |>
+    rename(
+      Zone = zone_label,
+      #`Hours in range` = hours_in_range,
+      #`Occupied hours with data` = total_hours,
+      `% occupied hours in range` = pct_hours_in_range
+    ) |> select(Zone, `% occupied hours in range`),
+  caption = sprintf("Occupied hours with operative temperature between %.1f and %.1f °C", config$top_band[1], config$top_band[2])
+)
+```
+
+The same data can be visualized in a different way using a whisker plot to show the distribution of operative temperature for each zone. The points mark monthly medians and the whiskers span the 5th to 95th percentiles. Wider ranges indicate greater variation in occupied-hour operative temperature.
+The plot shows how often each zone sits near or beyond the limits.
+
+```{r topbox-whisker, fig.height = 7.5}
+plot_monthly_top(data, config)
+```
+
+**In this example.** From June to September, median operative temperature in every zone is 24.5–25 °C, at the upper edge of the reference band, with narrow ranges that indicate cooling holding the setpoint. In winter, the perimeter zones, especially north and west, show much wider ranges and medians near 20 °C, while the core stays narrow year-round. 
+
+
+# 4. Why does discomfort occur? {#why}
+An event time series plot can help identify potential reasons for discomfort identified during a period of interest identified in the earlier plots. For example, the carpet plots showed insufficient heating in the morning and evening in winter; comparing zone and outdoor conditions over the same hours may test possible explanations.
+**Event time series:** Pick a representative period from the risk matrix or carpet plot (here, one week) and plot the comfort result alongside its likely drivers on a shared time axis. The top panel shows outdoor and zone operative temperature, the bottom panel shows PMV against the comfort band, and grey shading marks occupied hours.
+
+### Example: Compare winter cool discomfort in north zone vs core zone
+```{r why-function, echo=FALSE, fig.height=6}
+plot_event(data, config, zone = "north",
+           start = sprintf("%d-01-29", params$simulation_year),
+           compare = "oat",
+           title = "Winter week, north zone")
+```
+
+
+```{r why-winter, fig.height=6, echo=FALSE}
+plot_event(data, config, zone = "core",
+           start = sprintf("%d-01-29", params$simulation_year),
+           compare = "oat",
+           title = " Winter week, core zone")
+```
+
+**In this example.** Outdoor temperature ranges from about −7 to 15 °C. North-zone operative temperature starts each occupied period near 18–19 °C and rises to about 20.5 °C by mid-afternoon. PMV stays below −0.5 throughout occupied hours, reaching only about −0.6 at the peak. In the last occupied hours operative temperature drops by about 2 °C and PMV falls to about −1.3. Under the same weather the core stays at 21–23 °C and within the comfort band, apart from the first one or two occupied hours each morning (PMV about −0.55). This contrast points to perimeter heat loss that the north zone's heating doesn't offset, not to a building-wide setpoint issue. The low PMV at start-up suggests the warm-up period is too short, and the evening drop suggests setback begins while the zone is still occupied. Unmet-hour reports and zone heating rates would show whether capacity also contributes.
+
+# 5. Comparing designs or scenarios {#compare}
+
+For design or operating comparisons, apply the same data processing, comfort criteria, occupied-hour filters, and compare visualizations between both scenarios. The following example compares the original model with a revised clothing schedule to isolate the effect of occupant assumptions in the PMV results. The revised schedule is a four-step schedule: 1.1 clo from 1 January to 30 March, 1.0 clo to 30 June, 0.7 clo to 15 September, and 1.1 clo to 31 December. Because clothing does not enter the EnergyPlus zone heat balance, operative temperatures are identical; only the comfort calculation changes.
+
+```{r stacked-comfort-comparison, echo=FALSE, fig.cap="Stacked comfort comparison: #original and clothing-adjusted scenarios.", fig.width=14, fig.height=5, out.width="100%"}
+csv_file <- file.path("sims", "ASHRAE901_OfficeSmall_STD2004_Albuquerque_PMV_cloadj.csv")
+ep_raw <- read.csv(
+  csv_file,
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+data_comp <- process_df(
+  ep_raw,
+  config,
+  simulation_year = params$simulation_year  # same year as `data`, so weekdays line up
+)
+p_original <- plot_pmv_bands(data, config) +
+  labs(title = "Original")
+p_adjusted <- plot_pmv_bands(data_comp, config) +
+  labs(title = "Clothing schedule adjusted")
+(p_original + p_adjusted) +
+  patchwork::plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+```
+
+
+```{r annual-heatmap-comparison, fig.cap="Annual heatmap comparison: original and clothing-adjusted scenarios.", fig.width=14, fig.height=10, out.width="100%", echo=FALSE}
+p_original <-plot_annual_heatmap(data, config)
+p_adjusted <- plot_annual_heatmap(data_comp, config) 
+(p_original / p_adjusted) +
+  patchwork::plot_layout(guides = "collect") 
+```
+
+
+**In this example.** The comfortable share rises in every zone, almost entirely because summer warm discomfort disappears; cool discomfort is essentially unchanged because it is driven by low winter temperatures rather than by clothing. A small new warm cluster appears in late September in the north zone, where the schedule steps from 0.7 to 1.1 clo while indoor temperatures are still near 24.5 °C, an artifact of abrupt step changes. PMV results should therefore be reported together with their clothing assumptions which could context-specific (Schiavon and Lee 2013).
+
+
+**Suggested citation**
+
+Nambiar, C., Kramer, T., and Schiavon, S. (2026). *Visualizing EnergyPlus Thermal Comfort Outputs: A Question-Driven Guide* (v1.0). Center for the
+Built Environment, University of California, Berkeley.
+https://doi.org/[Zenodo DOI]
+
+Code: [repository URL]
+License: CC BY 4.0 for text, MIT for code
+
+
+
+## References
