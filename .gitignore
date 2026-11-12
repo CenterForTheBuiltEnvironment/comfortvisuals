@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 .Rhistory
 .RData
 .Rproj.user/
@@ -5,4 +6,13 @@
 *_files/
 *.html
 data/raw/
+=======
+.Rhistory
+.RData
+.Rproj.user/
+*_cache/
+*_files/
+*.html
+data/raw/
+>>>>>>> 9c8e41267c455bb2d7973d5937356176f8a2464a
 .vscode/
