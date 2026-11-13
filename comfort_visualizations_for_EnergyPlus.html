@@ -11,7 +11,7 @@
 
 <meta name="author" content="Chitra Nambiar, Tobias Kramer, Stefano Schiavon, Center for the Built Environment, UC Berkeley" />
 
-<meta name="date" content="2026-11-12" />
+<meta name="date" content="2026-11-13" />
 
 <title>Visualizing thermal comfort simulation outputs from EnergyPlus</title>
 
@@ -466,7 +466,7 @@ outputs from EnergyPlus</h1>
 comfort simulation outputs</h3>
 <h4 class="author">Chitra Nambiar, Tobias Kramer, Stefano Schiavon,
 <em>Center for the Built Environment, UC Berkeley</em></h4>
-<h4 class="date">2026-11-12</h4>
+<h4 class="date">2026-11-13</h4>
 
 </div>
 
@@ -761,14 +761,13 @@ are not captured in the operative temperature calculation.</p>
 <div id="when" class="section level1">
 <h1>2. When does discomfort occur?</h1>
 <p>To identify when the a zone experiences comfortable, cool or warm
-discomfort, use carpet plots. Carpet plots display the comfort status of
-a selected zone over every simulation timestep to help visualize the
-temporal distribution of comfort conditions. carpet plots based on PMV
-bands and operative temperature bands and relative humidity are shown
-below. The carpet plots are accompanied by a percentage bar that shows
-the share of occupied hours in each comfort category. The carpet plots
-can be used to identify seasonal patterns and daily patterns during
-occupied hours.</p>
+discomfort, use carpet plots. They display the comfort status of a
+selected zone over every simulation timestep to help visualize the
+temporal distribution of comfort conditions. Carpet plots based on PMV
+bands, operative temperature bands, and relative humidity are shown
+below. They are accompanied by a percentage bar that shows the share of
+occupied hours in each comfort category. The carpet plots can be used to
+identify seasonal patterns and daily patterns during occupied hours.</p>
 <div id="daily-and-hourly-pattern-carpet-plots" class="section level3">
 <h3>Daily and hourly pattern: carpet plots</h3>
 <p><strong>Carpet plot</strong> In this heatmap or carpet plot, each
@@ -814,14 +813,14 @@ which may also be contributing to cool PMV band hours.</p>
 <h1>3. How often does discomfort occur?</h1>
 <p>Use the distribution plots below to compare each zone with a
 project-defined target, such as 80% of occupied hours within the
-selected comfort band or to compare design options. The target and the
-comfort criteria should be stated explicitly for the project.</p>
+selected comfort band. The target and the comfort criteria should be
+stated explicitly for the project.</p>
 <div id="distribution-of-operative-temperature" class="section level3">
 <h3>Distribution of operative temperature</h3>
 <p><strong>Operative-temperature distribution.</strong> The histograms
 show the spread of occupied-hour temperatures and whether a zone has one
-or more common operating temperature ranges - another common comfort
-metric used in the literature <span class="citation">(<a href="#ref-carlucci_review_2012">Carlucci and Pagliano 2012</a>)</span>.
+or more common operating temperature ranges - a common comfort metric
+used in the literature <span class="citation">(<a href="#ref-carlucci_review_2012">Carlucci and Pagliano 2012</a>)</span>.
 The illustrative reference band is shown with grey dotted lines and is
 set at 20.0-25.0 °C. The accompanying table summarizes the share of
 occupied hours within this range for each zone. Bars outside the dashed
@@ -910,10 +909,10 @@ earlier plots. For example, the carpet plots showed insufficient heating
 in the morning and evening in winter; comparing zone and outdoor
 conditions over the same hours may test possible explanations.
 <strong>Event time series:</strong> Pick a representative period from
-the risk matrix or carpet plot (here, one week) and plot the comfort
-result alongside its likely drivers on a shared time axis. The top panel
-shows outdoor and zone operative temperature, the bottom panel shows PMV
-against the comfort band, and grey shading marks occupied hours.</p>
+carpet plot (here, one week) and plot the comfort result alongside its
+likely drivers on a shared time axis. The top panel shows outdoor and
+zone operative temperature, the bottom panel shows PMV against the
+comfort band, and grey shading marks occupied hours.</p>
 <p>Call <code>plot_event()</code> to generate the event time series
 plot. The function can also compare other reported variables such as
 outdoor temperature, relative humidity, or solar radiation. The
@@ -976,7 +975,8 @@ context-specific (Schiavon and Lee 2013).</p>
 EnergyPlus Thermal Comfort Outputs: A Question-Driven Guide</em> (v1.0).
 Center for the Built Environment, University of California, Berkeley. <a href="https://doi.org/%5BZenodo" class="uri">https://doi.org/[Zenodo</a>
 DOI]</p>
-<p>Code: [repository URL] License: CC BY 4.0 for text, MIT for code</p>
+<p>Code: <a href="https://github.com/CenterForTheBuiltEnvironment/comfortvisuals.git" class="uri">https://github.com/CenterForTheBuiltEnvironment/comfortvisuals.git</a>
+License: CC BY 4.0 for text, MIT for code</p>
 <div id="references" class="section level2 unnumbered">
 <h2 class="unnumbered">References</h2>
 <div id="refs" class="references csl-bib-body hanging-indent">

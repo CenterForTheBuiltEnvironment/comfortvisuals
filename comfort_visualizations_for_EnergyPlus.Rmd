@@ -1304,7 +1304,7 @@ The operative-temperature scorecard shows similar patterns as the PMV but with h
 
 # 2. When does discomfort occur? {#when}
 
-To identify when the a zone experiences comfortable, cool or warm discomfort, use carpet plots. Carpet plots display the comfort status of a selected zone over every simulation timestep to help visualize the temporal distribution of comfort conditions. carpet plots based on PMV bands and operative temperature bands and relative humidity are shown below. The carpet plots are accompanied by a percentage bar that shows the share of occupied hours in each comfort category. The carpet plots can be used to identify seasonal patterns and daily patterns during occupied hours. 
+To identify when the a zone experiences comfortable, cool or warm discomfort, use carpet plots. They display the comfort status of a selected zone over every simulation timestep to help visualize the temporal distribution of comfort conditions. Carpet plots based on PMV bands, operative temperature bands, and relative humidity are shown below. They are accompanied by a percentage bar that shows the share of occupied hours in each comfort category. The carpet plots can be used to identify seasonal patterns and daily patterns during occupied hours. 
 
 ### Daily and hourly pattern: carpet plots
 
@@ -1331,7 +1331,8 @@ print(plot_annual_top_heatmap(
 print(plot_annual_rh_heatmap(
   data, config,
   bar_gap = 3,
-  bar_width = 20
+  bar_width = 20,
+  save_plot = TRUE
 ))
 ```
 
@@ -1339,11 +1340,11 @@ print(plot_annual_rh_heatmap(
 The relative humidity carpet plot shows that some days in winter the north zone experience low humidity in addition to low temperatures which may also be contributing to cool PMV band hours.
 
 # 3. How often does discomfort occur? {#how-often}
-Use the distribution plots below to compare each zone with a project-defined target, such as 80% of occupied hours within the selected comfort band or to compare design options. The target and the comfort criteria should be stated explicitly for the project.
+Use the distribution plots below to compare each zone with a project-defined target, such as 80% of occupied hours within the selected comfort band. The target and the comfort criteria should be stated explicitly for the project.
 
 ### Distribution of operative temperature
 
-**Operative-temperature distribution.** The histograms show the spread of occupied-hour temperatures and whether a zone has one or more common operating temperature ranges - another common comfort metric used in the literature [@carlucci_review_2012]. The illustrative reference band is shown with grey dotted lines and is set at `r sprintf("%.1f-%.1f", top_band[1], top_band[2])` °C. The accompanying table summarizes the share of occupied hours within this range for each zone.
+**Operative-temperature distribution.** The histograms show the spread of occupied-hour temperatures and whether a zone has one or more common operating temperature ranges - a common comfort metric used in the literature [@carlucci_review_2012]. The illustrative reference band is shown with grey dotted lines and is set at `r sprintf("%.1f-%.1f", top_band[1], top_band[2])` °C. The accompanying table summarizes the share of occupied hours within this range for each zone.
 Bars outside the dashed lines show how often temperatures fall beyond the illustrative reference operative temperature band. A narrow peak indicates relatively consistent temperatures, while a broad distribution indicates greater variation. Two peaks can reflect different operating conditions, such as heating and cooling seasons.
 
 Call `plot_top_distribution()` to generate the operative temperature distribution plot and summary table.
@@ -1382,7 +1383,7 @@ plot_monthly_top(data, config)
 
 # 4. Why does discomfort occur? {#why}
 An event time series plot can help identify potential reasons for discomfort identified during a period of interest identified in the earlier plots. For example, the carpet plots showed insufficient heating in the morning and evening in winter; comparing zone and outdoor conditions over the same hours may test possible explanations.
-**Event time series:** Pick a representative period from the risk matrix or carpet plot (here, one week) and plot the comfort result alongside its likely drivers on a shared time axis. The top panel shows outdoor and zone operative temperature, the bottom panel shows PMV against the comfort band, and grey shading marks occupied hours.
+**Event time series:** Pick a representative period from carpet plot (here, one week) and plot the comfort result alongside its likely drivers on a shared time axis. The top panel shows outdoor and zone operative temperature, the bottom panel shows PMV against the comfort band, and grey shading marks occupied hours.
 
 Call `plot_event()` to generate the event time series plot. The function can also compare other reported variables such as outdoor temperature, relative humidity, or solar radiation. The comparison variable(s) can be overlaid on the temperature panel or plotted in a separate panel below the temperature panel.
 
@@ -1424,6 +1425,8 @@ p_original <- plot_pmv_bands(data, config) +
   labs(title = "Original")
 p_adjusted <- plot_pmv_bands(data_comp, config) +
   labs(title = "Clothing schedule adjusted")
+#save_ep_plot(p_original, "pmv_bands_original.png", config)
+#save_ep_plot(p_adjusted, "pmv_bands_clothing_adjusted.png", config)
 (p_original + p_adjusted) +
   patchwork::plot_layout(guides = "collect") &
   theme(legend.position = "bottom")
@@ -1433,6 +1436,8 @@ p_adjusted <- plot_pmv_bands(data_comp, config) +
 ```{r annual-heatmap-comparison, fig.cap="Annual heatmap comparison: original and clothing-adjusted scenarios.", fig.width=14, fig.height=10, out.width="100%", echo=FALSE}
 p_original <-plot_annual_heatmap(data, config)
 p_adjusted <- plot_annual_heatmap(data_comp, config) 
+#save_ep_plot(p_original, "annual_heatmap_original.png", config)
+#save_ep_plot(p_adjusted, "annual_heatmap_clothing_adjusted.png", config)
 (p_original / p_adjusted) +
   patchwork::plot_layout(guides = "collect") 
 ```
@@ -1443,11 +1448,10 @@ p_adjusted <- plot_annual_heatmap(data_comp, config)
 
 **Suggested citation**
 
-Nambiar, C., Kramer, T., and Schiavon, S. (2026). *Visualizing EnergyPlus Thermal Comfort Outputs: A Question-Driven Guide* (v1.0). Center for the
-Built Environment, University of California, Berkeley.
+Nambiar, C., Kramer, T., and Schiavon, S. (2026). *Visualizing EnergyPlus Thermal Comfort Outputs: A Question-Driven Guide* (v1.0). Center for the Built Environment, University of California, Berkeley.
 https://doi.org/[Zenodo DOI]
 
-Code: [repository URL]
+Code: https://github.com/CenterForTheBuiltEnvironment/comfortvisuals.git
 License: CC BY 4.0 for text, MIT for code
 
 
