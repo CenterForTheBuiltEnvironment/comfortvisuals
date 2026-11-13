@@ -10,5 +10,5 @@ This code contains r code functions to visualize thermal comfort results from En
 
 Nambiar, C., Kramer, T., and Schiavon, S. (2026). \*Visualizing EnergyPlus Thermal Comfort Outputs: A Question-Driven Guide\* (v1.0). Center for the Built Environment, University of California, Berkeley.
 
-https://doi.org/\[Zenodo DOI]
+\[!\[DOI](https://zenodo.org/badge/1456192393.svg)](https://doi.org/10.5281/zenodo.24206624)
 
