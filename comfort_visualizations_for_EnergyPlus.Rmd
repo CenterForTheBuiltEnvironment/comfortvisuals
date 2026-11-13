@@ -480,15 +480,16 @@ plot_top_distribution <- function(data, config) {
       pct_hours_in_range = if_else(total_hours > 0, hours_in_range / total_hours, NA_real_),
       .groups = "drop"
     )
-  p <- ggplot(top_long, aes(top, fill = zone_label)) +
+  p <- ggplot(top_long, aes(top)) +
     geom_histogram(aes(y = after_stat(density)), bins = 80, linewidth = 0.2,
+                   fill = "goldenrod3",
                    position = "identity", show.legend = FALSE, alpha = 0.55) +
-    geom_vline(xintercept = config$top_band, linetype = "dashed", colour = "grey45", linewidth = 0.4) +
+    geom_vline(xintercept = config$top_band, colour = "#c9e0b0", linewidth = 1) +
     facet_wrap(~zone_label, ncol = 1) +
-    scale_fill_manual(values = config$zone_colors, na.value = "grey70") +
-    scale_x_continuous(breaks = c(18, 20, 22, 24, 26, 28)) +
+    scale_x_continuous(breaks = c(15, 20, 25, 30)) +
+    scale_y_continuous(breaks = c(0, 0.3, 0.6, 0.9)) +
     labs(title = "Occupied-hour operative temperature by zone",
-         subtitle = sprintf("Dashed lines show %.1f–%.1f °C", config$top_band[1], config$top_band[2]),
+         subtitle = sprintf("Vertical lines show %.1f–%.1f °C", config$top_band[1], config$top_band[2]),
          x = "Operative temperature (°C)", y = "Density") + theme_ep(config)
   save_ep_plot(p, "operative_temperature_distribution.png", config, width = 9, height = 8)
   list(plot = p, summary = summary_tbl)
@@ -575,12 +576,13 @@ plot_monthly_top <- function(data, config) {
     mutate(month = factor(as.character(month), levels = month.abb))
   p <- ggplot(monthly, aes(y = month)) +
     annotate("rect", xmin = config$top_band[1], xmax = config$top_band[2],
-             ymin = -Inf, ymax = Inf, fill = "grey45", alpha = 0.25) +
+             ymin = -Inf, ymax = Inf, fill = "#c9e0b0", alpha = 0.25) +
     geom_errorbar(aes(xmin = p05, xmax = p95), height = 0.25,
-                  colour = "#4D4D4D", linewidth = 0.6, orientation = "y") +
+                  colour = "goldenrod3", linewidth = 0.6, orientation = "y") +
     #geom_errorbar(aes(xmin = p25, xmax = p75), height = 0.25, linewidth = 2,
     #              colour = "grey45", orientation = "y") +
     geom_point(aes(x = median), size = 1.8, colour = "#1F1F1F") +
+    scale_x_continuous(breaks = c(15, 20, 25, 30)) +
     facet_wrap(~zone_label, nrow = 1) +
     labs(title = "Monthly operative-temperature distribution",
          subtitle = "Whiskers: 5th–95th percentiles, dot: median",
@@ -711,7 +713,7 @@ plot_annual_heatmap <- function(data, config, zone = config$selected_zone,
     ) +
     # Percentage labels
     ggplot2::geom_text(
-      data = dplyr::filter(bar_data, pct > 0),
+      data = dplyr::filter(bar_data, pct >= 0.05),
       ggplot2::aes(
         x = xmid,
         y = (ymin_plot + ymax_plot) / 2,
@@ -883,7 +885,7 @@ plot_annual_top_heatmap <- function(data, config, zone = config$selected_zone,
     ) +
     # Percentage labels
     ggplot2::geom_text(
-      data = dplyr::filter(bar_data, pct > 0),
+      data = dplyr::filter(bar_data, pct >= 0.05),
       ggplot2::aes(x = xmid, y = (ymin_plot + ymax_plot) / 2, label = label),
       inherit.aes = FALSE,
       size = 3.5,
@@ -1082,7 +1084,7 @@ plot_annual_rh_heatmap <- function(
     ) +
     # Percentage labels
     ggplot2::geom_text(
-      data = dplyr::filter(rh_bar_data, pct > 0),
+      data = dplyr::filter(rh_bar_data, pct >= 0.05),
       ggplot2::aes(
         x = xmid,
         y = (ymin_plot + ymax_plot) / 2,
@@ -1202,17 +1204,21 @@ plot_event <- function(data, config, zone = config$selected_zone, start, days = 
   p_temp <- ggplot(temp_long, aes(t_mid, value, colour = name)) +
     occ_rect +
     annotate("rect", xmin = t0, xmax = t1, ymin = config$top_band[1], ymax = config$top_band[2],
-             fill = "grey45", alpha = 0.25) +
+             fill = "#c9e0b0", alpha = 0.25) +
     geom_line(linewidth = 1, na.rm = TRUE) +
     scale_colour_manual(values = c(`Zone operative` = "goldenrod3",
                                    cmp_cols), name = NULL) +
     x_scale + 
     labs(y = "Temperature (°C)", x = NULL,
          title = title %||% sprintf("%s zone, week of %s", zone_label, format(t0, "%d %b %Y")),
-         subtitle = "Grey shading = occupied hours; light band = illustrative operative-temperature range") +
+         subtitle = "Grey vertical shading = occupied hours; light horizontal band = illustrative operative-temperature range") +
     theme_ep(config) +
     theme(legend.position = "top", legend.justification = "left",
-          axis.text.x = element_blank())
+          axis.text.x = element_blank(),
+          axis.line = element_blank(),
+          axis.ticks = element_line(colour = "grey25", linewidth = 0.8),
+          axis.ticks.length = grid::unit(8, "pt"),
+          panel.grid.major.x = element_blank())
   # ── Optional separate panel for comparison vars in other units ──
   p_cmp <- NULL
   if (compare_panel) {
@@ -1234,13 +1240,20 @@ plot_event <- function(data, config, zone = config$selected_zone, start, days = 
   p_pmv <- ggplot(filter(ev, occupied, !is.na(pmv)), aes(t_mid, pmv)) +
     occ_rect +
     annotate("rect", xmin = t0, xmax = t1, ymin = -config$pmv_comfort, ymax = config$pmv_comfort,
-             fill = "grey45", alpha = 0.25) +
+             fill = "#c9e0b0", alpha = 0.25) +
     geom_hline(yintercept = 0, colour = "grey70", linewidth = 0.3) +
     geom_point(aes(colour = band), size = 0.9) +
     scale_colour_manual(values = event_cols, drop = FALSE, guide = "none") +
     x_scale + scale_y_continuous(breaks = c(-0.5, 0.5)) +
     coord_cartesian(ylim = pmv_ylim) +
-    labs(y = "PMV (occupied)", x = NULL) + theme_ep(config)
+    labs(y = "PMV (occupied)", x = NULL) +
+    theme_ep(config) +
+    theme(
+      axis.line = element_blank(),
+      axis.ticks = element_line(colour = "grey25", linewidth = 0.8),
+      axis.ticks.length = grid::unit(8, "pt"),
+      panel.grid.major.x = element_blank()
+    )
   panels  <- Filter(Negate(is.null), list(p_temp, p_cmp, p_pmv))
   heights <- if (compare_panel) c(1.4, 1, 1) else c(1.4, 1)
   combined <- patchwork::wrap_plots(panels, ncol = 1, heights = heights) &
